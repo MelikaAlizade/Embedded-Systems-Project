@@ -20,6 +20,12 @@
 #include "sdkconfig.h"
 #include "camera_index.h"
 #include "board_config.h"
+#include "Arduino.h"
+
+extern bool ledState;
+extern unsigned long ledOnTime;
+extern const unsigned long LED_DURATION;
+#define RECOGNITION_LED_PIN 14
 
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_ARDUHAL_ESP_LOG)
 #include "esp32-hal-log.h"
@@ -667,6 +673,36 @@ static esp_err_t index_handler(httpd_req_t *req) {
   }
 }
 
+static esp_err_t led_control_handler(httpd_req_t *req) {
+  char *buf = NULL;
+  char action[32];
+
+  if (parse_get(req, &buf) != ESP_OK) {
+    return ESP_FAIL;
+  }
+  
+  if (httpd_query_key_value(buf, "action", action, sizeof(action)) != ESP_OK) {
+    free(buf);
+    httpd_resp_send_404(req);
+    return ESP_FAIL;
+  }
+  free(buf);
+
+  if (strcmp(action, "on") == 0) {
+    digitalWrite(RECOGNITION_LED_PIN, HIGH);
+    ledState = true;
+    ledOnTime = millis();
+    Serial.println("Recognition LED turned ON via HTTP");
+  } else if (strcmp(action, "off") == 0) {
+    digitalWrite(RECOGNITION_LED_PIN, LOW);
+    ledState = false;
+    Serial.println("Recognition LED turned OFF via HTTP");
+  }
+
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  return httpd_resp_send(req, "OK", 2);
+}
+
 void startCameraServer() {
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
   config.max_uri_handlers = 16;
@@ -814,6 +850,19 @@ void startCameraServer() {
 #endif
   };
 
+    httpd_uri_t led_uri = {
+    .uri = "/led",
+    .method = HTTP_GET,
+    .handler = led_control_handler,
+    .user_ctx = NULL
+#ifdef CONFIG_HTTPD_WS_SUPPORT
+    ,
+    .is_websocket = true,
+    .handle_ws_control_frames = false,
+    .supported_subprotocol = NULL
+#endif
+  };
+
   ra_filter_init(&ra_filter, 20);
 
   log_i("Starting web server on port: '%d'", config.server_port);
@@ -829,6 +878,7 @@ void startCameraServer() {
     httpd_register_uri_handler(camera_httpd, &greg_uri);
     httpd_register_uri_handler(camera_httpd, &pll_uri);
     httpd_register_uri_handler(camera_httpd, &win_uri);
+    httpd_register_uri_handler(camera_httpd, &led_uri);
   }
 
   config.server_port += 1;
